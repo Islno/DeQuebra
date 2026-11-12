@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/shopee?action=sync_prices",
+      "schedule": "0 9 * * *"
+    }
+  ]
+}
