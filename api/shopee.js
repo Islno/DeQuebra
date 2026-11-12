@@ -6,9 +6,11 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const SHOPEE_APP_ID = (process.env.SHOPEE_APP_ID || "").trim();
 const SHOPEE_SECRET = (process.env.SHOPEE_SECRET || "").trim();
 
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function shopeeGraphQL(query) {
   if (!SHOPEE_APP_ID || !SHOPEE_SECRET) {
-    throw new Error("Variáveis SHOPEE_APP_ID ou SHOPEE_SECRET ausentes na Vercel (faça Redeploy após adicioná-las).");
+    throw new Error("Variáveis SHOPEE_APP_ID ou SHOPEE_SECRET ausentes na Vercel.");
   }
   const timestamp = Math.floor(Date.now() / 1000);
   const payload = JSON.stringify({ query });
@@ -27,7 +29,9 @@ async function shopeeGraphQL(query) {
   });
 
   const json = await res.json();
-  if (json.errors) throw new Error(json.errors[0]?.message || "Erro na API da Shopee");
+  if (json.errors && json.errors.length > 0) {
+    throw new Error(json.errors[0].message || "Erro na API da Shopee");
+  }
   return json.data;
 }
 
@@ -78,22 +82,21 @@ export default async function handler(req, res) {
       return res.status(200).json({ shortLink: data?.generateShortLink?.shortLink });
     }
 
-    // 2. IMPORTAR ROUPAS E ACESSÓRIOS (EM LOTE RÁPIDO)
+    // 2. IMPORTAR ROUPAS E ACESSÓRIOS (SEQUENCIAL E COM PALAVRAS-CHAVE CURTAS)
     if (action === "import_items") {
       const lotes = body.lotes || [
-        { kw: "camiseta oversized streetwear masculina", cat: "Camisetas", limit: 4 },
-        { kw: "calca cargo larga baggy streetwear", cat: "Calças & Bermudas", limit: 4 },
-        { kw: "moletom canguru oversized streetwear", cat: "Moletons & Jaquetas", limit: 4 },
-        { kw: "bone dad hat gorro beanie streetwear", cat: "Bonés & Gorros", limit: 4 },
-        { kw: "corrente masculina inox prata anel oculos", cat: "Acessórios", limit: 4 },
-        { kw: "shoulder bag transversal streetwear", cat: "Shoulder Bags", limit: 4 }
+        { kw: "camiseta oversized", cat: "Camisetas", limit: 4 },
+        { kw: "calca cargo", cat: "Calças & Bermudas", limit: 4 },
+        { kw: "moletom canguru", cat: "Moletons & Jaquetas", limit: 4 },
+        { kw: "bone", cat: "Bonés & Gorros", limit: 4 },
+        { kw: "corrente masculina", cat: "Acessórios", limit: 4 },
+        { kw: "shoulder bag", cat: "Shoulder Bags", limit: 4 }
       ];
 
       const catsAtuais = (await sbRest("categorias?select=*")) || [];
       const mapaCats = {};
       catsAtuais.forEach(c => { mapaCats[c.nome.toLowerCase()] = c.id; });
 
-      // Garante que todas as categorias existem
       for (const lote of lotes) {
         const chave = lote.cat.toLowerCase();
         if (!mapaCats[chave]) {
@@ -108,39 +111,47 @@ export default async function handler(req, res) {
       const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
       const nomesExistentes = new Set(prodsAtuais.map(p => p.nome));
 
-      // Busca todos os lotes na Shopee em paralelo para não dar timeout na Vercel
-      const resultadosShopee = await Promise.all(
-        lotes.map(async (lote) => {
+      const novosProdutos = [];
+      const agora = new Date().toISOString();
+      let ultimoErroShopee = null;
+
+      // Executa um por um com pausa de 300ms para evitar o erro 10000 da Shopee
+      for (const lote of lotes) {
+        try {
+          const termo = (lote.kw || "").trim();
           const q = `query {
-            productOfferV2(keyword: ${JSON.stringify(lote.kw)}, sortType: 2, page: 1, limit: ${lote.limit || 4}) {
+            productOfferV2(keyword: ${JSON.stringify(termo)}, sortType: 1, page: 1, limit: ${lote.limit || 4}) {
               nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
             }
           }`;
           const data = await shopeeGraphQL(q);
-          return { catId: mapaCats[lote.cat.toLowerCase()], nodes: data?.productOfferV2?.nodes || [] };
-        })
-      );
+          const nodes = data?.productOfferV2?.nodes || [];
+          const catId = mapaCats[lote.cat.toLowerCase()];
 
-      const novosProdutos = [];
-      const agora = new Date().toISOString();
+          for (const item of nodes) {
+            const nomeLimpo = (item.productName || "").trim().slice(0, 90);
+            if (!nomeLimpo || nomesExistentes.has(nomeLimpo)) continue;
+            nomesExistentes.add(nomeLimpo);
 
-      for (const resLote of resultadosShopee) {
-        for (const item of resLote.nodes) {
-          const nomeLimpo = (item.productName || "").trim().slice(0, 90);
-          if (!nomeLimpo || nomesExistentes.has(nomeLimpo)) continue;
-          nomesExistentes.add(nomeLimpo);
-
-          novosProdutos.push({
-            nome: nomeLimpo,
-            categoria_id: resLote.catId,
-            preco: parseFloat(item.priceMin) || null,
-            link: item.offerLink,
-            descricao: `⭐ ${item.ratingStar || "4.9"} | 🔥 +${item.sales || 100} vendidos [REF:${item.itemId}]`,
-            foto_url: item.imageUrl,
-            atualizado_em: agora,
-            preco_atualizado_em: agora
-          });
+            novosProdutos.push({
+              nome: nomeLimpo,
+              categoria_id: catId,
+              preco: parseFloat(item.priceMin) || null,
+              link: item.offerLink,
+              descricao: `⭐ ${item.ratingStar || "4.9"} | 🔥 +${item.sales || 100} vendidos [REF:${item.itemId}]`,
+              foto_url: item.imageUrl,
+              atualizado_em: agora,
+              preco_atualizado_em: agora
+            });
+          }
+        } catch (errLote) {
+          ultimoErroShopee = errLote.message;
         }
+        await esperar(300);
+      }
+
+      if (novosProdutos.length === 0 && ultimoErroShopee) {
+        throw new Error(ultimoErroShopee);
       }
 
       if (novosProdutos.length > 0) {
@@ -153,22 +164,23 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, adicionados: novosProdutos.length });
     }
 
-    // 3. SINCRONIZAR PREÇOS
+    // 3. SINCRONIZAR PREÇOS (SEQUENCIAL PARA NÃO BLOQUEAR NA SHOPEE)
     if (action === "sync_prices") {
       const produtos = (await sbRest("produtos?select=*")) || [];
       let atualizados = 0;
+      let verificados = 0;
 
-      await Promise.all(
-        produtos.slice(0, 25).map(async (prod) => {
-          const matchRef = (prod.descricao || "").match(/\[REF:(\d+)\]/);
-          const itemId = matchRef?.[1];
-          const filtro = itemId
-            ? `itemId: ${itemId}, limit: 1`
-            : `keyword: ${JSON.stringify((prod.nome || "").slice(0, 45))}, limit: 1`;
-
-          const q = `query { productOfferV2(${filtro}) { nodes { priceMin } } }`;
+      for (const prod of produtos.slice(0, 15)) {
+        try {
+          const palavrasNome = (prod.nome || "").split(" ").slice(0, 3).join(" ");
+          const q = `query {
+            productOfferV2(keyword: ${JSON.stringify(palavrasNome)}, sortType: 1, page: 1, limit: 1) {
+              nodes { priceMin }
+            }
+          }`;
           const data = await shopeeGraphQL(q);
           const info = data?.productOfferV2?.nodes?.[0];
+          verificados++;
 
           if (info && info.priceMin) {
             const novoPreco = parseFloat(info.priceMin);
@@ -186,10 +198,11 @@ export default async function handler(req, res) {
               )
             });
           }
-        })
-      );
+        } catch (e) {}
+        await esperar(250);
+      }
 
-      return res.status(200).json({ ok: true, verificados: produtos.length, atualizados });
+      return res.status(200).json({ ok: true, verificados, atualizados });
     }
 
     return res.status(400).json({ error: "Ação inválida" });
