@@ -1,14 +1,14 @@
-const crypto = require("crypto");
+import crypto from "crypto";
 
 const SUPABASE_URL = "https://opohtwavqvtfykfgzkmx.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9wb2h0d2F2cXZ0ZnlrZmd6a214Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMzNTk0MTksImV4cCI6MjEwODkzNTQxOX0.Tklm_2VpnDjVzPqUiEeN8j41X0ug4zet34fJCvODsI0";
 
-const SHOPEE_APP_ID = process.env.SHOPEE_APP_ID;
-const SHOPEE_SECRET = process.env.SHOPEE_SECRET;
+const SHOPEE_APP_ID = (process.env.SHOPEE_APP_ID || "").trim();
+const SHOPEE_SECRET = (process.env.SHOPEE_SECRET || "").trim();
 
 async function shopeeGraphQL(query) {
   if (!SHOPEE_APP_ID || !SHOPEE_SECRET) {
-    throw new Error("Configure SHOPEE_APP_ID e SHOPEE_SECRET nas Environment Variables da Vercel.");
+    throw new Error("Variáveis SHOPEE_APP_ID ou SHOPEE_SECRET ausentes na Vercel (faça Redeploy após adicioná-las).");
   }
   const timestamp = Math.floor(Date.now() / 1000);
   const payload = JSON.stringify({ query });
@@ -31,24 +31,18 @@ async function shopeeGraphQL(query) {
   return json.data;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   try {
     const authHeader = req.headers.authorization || "";
     const token = authHeader.replace("Bearer ", "").trim();
     const isCron = req.headers["x-vercel-cron"] === "1";
 
-    // Verifica se o usuário está logado como Admin no Supabase
     if (!isCron) {
       if (!token) return res.status(401).json({ error: "Faça login como Admin primeiro." });
       const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-        headers: {
-          "apikey": SUPABASE_ANON_KEY,
-          "Authorization": `Bearer ${token}`
-        }
+        headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}` }
       });
-      if (!userRes.ok) {
-        return res.status(401).json({ error: "Sessão inválida. Entre novamente como Admin." });
-      }
+      if (!userRes.ok) return res.status(401).json({ error: "Sessão expirada. Saia e entre novamente no Admin." });
     }
 
     const authToken = isCron ? (process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY) : token;
@@ -73,7 +67,7 @@ module.exports = async function handler(req, res) {
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
     const action = req.query?.action || body.action;
 
-    // AÇÃO 1: CONVERTER LINK PARA AFILIADO
+    // 1. CONVERTER LINK
     if (action === "convert_link") {
       const q = `mutation {
         generateShortLink(input: { originUrl: ${JSON.stringify(body.url)}, subIds: ["DeQuebra"] }) {
@@ -84,14 +78,14 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ shortLink: data?.generateShortLink?.shortLink });
     }
 
-    // AÇÃO 2: IMPORTAR ROUPAS E ACESSÓRIOS
+    // 2. IMPORTAR ROUPAS E ACESSÓRIOS (EM LOTE RÁPIDO)
     if (action === "import_items") {
       const lotes = body.lotes || [
-        { kw: "camiseta oversized streetwear heavy cotton", cat: "Camisetas", limit: 5 },
-        { kw: "calca cargo larga baggy streetwear", cat: "Calças & Bermudas", limit: 5 },
-        { kw: "moletom canguru oversized hoodie streetwear", cat: "Moletons & Jaquetas", limit: 4 },
-        { kw: "bone dad hat five panel gorro beanie streetwear", cat: "Bonés & Gorros", limit: 4 },
-        { kw: "corrente masculina inox prata anel oculos vintage", cat: "Acessórios", limit: 5 },
+        { kw: "camiseta oversized streetwear masculina", cat: "Camisetas", limit: 4 },
+        { kw: "calca cargo larga baggy streetwear", cat: "Calças & Bermudas", limit: 4 },
+        { kw: "moletom canguru oversized streetwear", cat: "Moletons & Jaquetas", limit: 4 },
+        { kw: "bone dad hat gorro beanie streetwear", cat: "Bonés & Gorros", limit: 4 },
+        { kw: "corrente masculina inox prata anel oculos", cat: "Acessórios", limit: 4 },
         { kw: "shoulder bag transversal streetwear", cat: "Shoulder Bags", limit: 4 }
       ];
 
@@ -99,108 +93,107 @@ module.exports = async function handler(req, res) {
       const mapaCats = {};
       catsAtuais.forEach(c => { mapaCats[c.nome.toLowerCase()] = c.id; });
 
-      const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
-      const nomesExistentes = new Set(prodsAtuais.map(p => p.nome));
-
-      let adicionados = 0;
-
+      // Garante que todas as categorias existem
       for (const lote of lotes) {
-        let catId = mapaCats[lote.cat.toLowerCase()];
-        if (!catId) {
+        const chave = lote.cat.toLowerCase();
+        if (!mapaCats[chave]) {
           const novaCat = await sbRest("categorias", {
             method: "POST",
             body: JSON.stringify({ nome: lote.cat })
           });
-          if (novaCat?.[0]) {
-            catId = novaCat[0].id;
-            mapaCats[lote.cat.toLowerCase()] = catId;
-          }
-        }
-
-        const q = `query {
-          productOfferV2(keyword: ${JSON.stringify(lote.kw)}, sortType: 2, page: 1, limit: ${lote.limit || 5}) {
-            nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
-          }
-        }`;
-        const data = await shopeeGraphQL(q);
-        const nodes = data?.productOfferV2?.nodes || [];
-
-        for (const item of nodes) {
-          const nomeLimpo = (item.productName || "").trim().slice(0, 90);
-          if (!nomeLimpo || nomesExistentes.has(nomeLimpo)) continue;
-
-          const agora = new Date().toISOString();
-          const desc = `⭐ ${item.ratingStar || "4.9"} | 🔥 +${item.sales || 100} vendidos [REF:${item.itemId}]`;
-
-          await sbRest("produtos", {
-            method: "POST",
-            body: JSON.stringify({
-              nome: nomeLimpo,
-              categoria_id: catId,
-              preco: parseFloat(item.priceMin) || null,
-              link: item.offerLink,
-              descricao: desc,
-              foto_url: item.imageUrl,
-              atualizado_em: agora,
-              preco_atualizado_em: agora
-            })
-          });
-
-          nomesExistentes.add(nomeLimpo);
-          adicionados++;
+          if (novaCat?.[0]) mapaCats[chave] = novaCat[0].id;
         }
       }
-      return res.status(200).json({ ok: true, adicionados });
+
+      const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
+      const nomesExistentes = new Set(prodsAtuais.map(p => p.nome));
+
+      // Busca todos os lotes na Shopee em paralelo para não dar timeout na Vercel
+      const resultadosShopee = await Promise.all(
+        lotes.map(async (lote) => {
+          const q = `query {
+            productOfferV2(keyword: ${JSON.stringify(lote.kw)}, sortType: 2, page: 1, limit: ${lote.limit || 4}) {
+              nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
+            }
+          }`;
+          const data = await shopeeGraphQL(q);
+          return { catId: mapaCats[lote.cat.toLowerCase()], nodes: data?.productOfferV2?.nodes || [] };
+        })
+      );
+
+      const novosProdutos = [];
+      const agora = new Date().toISOString();
+
+      for (const resLote of resultadosShopee) {
+        for (const item of resLote.nodes) {
+          const nomeLimpo = (item.productName || "").trim().slice(0, 90);
+          if (!nomeLimpo || nomesExistentes.has(nomeLimpo)) continue;
+          nomesExistentes.add(nomeLimpo);
+
+          novosProdutos.push({
+            nome: nomeLimpo,
+            categoria_id: resLote.catId,
+            preco: parseFloat(item.priceMin) || null,
+            link: item.offerLink,
+            descricao: `⭐ ${item.ratingStar || "4.9"} | 🔥 +${item.sales || 100} vendidos [REF:${item.itemId}]`,
+            foto_url: item.imageUrl,
+            atualizado_em: agora,
+            preco_atualizado_em: agora
+          });
+        }
+      }
+
+      if (novosProdutos.length > 0) {
+        await sbRest("produtos", {
+          method: "POST",
+          body: JSON.stringify(novosProdutos)
+        });
+      }
+
+      return res.status(200).json({ ok: true, adicionados: novosProdutos.length });
     }
 
-    // AÇÃO 3: SINCRONIZAR PREÇOS AUTOMATICAMENTE
+    // 3. SINCRONIZAR PREÇOS
     if (action === "sync_prices") {
       const produtos = (await sbRest("produtos?select=*")) || [];
       let atualizados = 0;
-      let verificados = 0;
 
-      for (const prod of produtos) {
-        const matchRef = (prod.descricao || "").match(/\[REF:(\d+)\]/);
-        const matchUrl = (prod.link || "").match(/-i\.\d+\.(\d+)/);
-        const itemId = matchRef?.[1] || matchUrl?.[1];
+      await Promise.all(
+        produtos.slice(0, 25).map(async (prod) => {
+          const matchRef = (prod.descricao || "").match(/\[REF:(\d+)\]/);
+          const itemId = matchRef?.[1];
+          const filtro = itemId
+            ? `itemId: ${itemId}, limit: 1`
+            : `keyword: ${JSON.stringify((prod.nome || "").slice(0, 45))}, limit: 1`;
 
-        const filtro = itemId
-          ? `itemId: ${itemId}, limit: 1`
-          : `keyword: ${JSON.stringify((prod.nome || "").slice(0, 50))}, limit: 1`;
+          const q = `query { productOfferV2(${filtro}) { nodes { priceMin } } }`;
+          const data = await shopeeGraphQL(q);
+          const info = data?.productOfferV2?.nodes?.[0];
 
-        const q = `query {
-          productOfferV2(${filtro}) {
-            nodes { itemId priceMin offerLink imageUrl }
+          if (info && info.priceMin) {
+            const novoPreco = parseFloat(info.priceMin);
+            const precoAntigo = parseFloat(prod.preco);
+            const agora = new Date().toISOString();
+            const mudou = !isNaN(novoPreco) && novoPreco !== precoAntigo;
+            if (mudou) atualizados++;
+
+            await sbRest(`produtos?id=eq.${prod.id}`, {
+              method: "PATCH",
+              body: JSON.stringify(
+                mudou
+                  ? { preco: novoPreco, preco_atualizado_em: agora, atualizado_em: agora }
+                  : { preco_atualizado_em: agora }
+              )
+            });
           }
-        }`;
+        })
+      );
 
-        const data = await shopeeGraphQL(q);
-        const info = data?.productOfferV2?.nodes?.[0];
-        verificados++;
-
-        if (info && info.priceMin) {
-          const novoPreco = parseFloat(info.priceMin);
-          const precoAntigo = parseFloat(prod.preco);
-          const agora = new Date().toISOString();
-
-          const payloadUpdate = (!isNaN(novoPreco) && novoPreco !== precoAntigo)
-            ? { preco: novoPreco, preco_atualizado_em: agora, atualizado_em: agora }
-            : { preco_atualizado_em: agora };
-
-          if (!isNaN(novoPreco) && novoPreco !== precoAntigo) atualizados++;
-
-          await sbRest(`produtos?id=eq.${prod.id}`, {
-            method: "PATCH",
-            body: JSON.stringify(payloadUpdate)
-          });
-        }
-      }
-
-      return res.status(200).json({ ok: true, verificados, atualizados });
+      return res.status(200).json({ ok: true, verificados: produtos.length, atualizados });
     }
 
     return res.status(400).json({ error: "Ação inválida" });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
-};
+}
