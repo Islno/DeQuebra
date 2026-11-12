@@ -136,7 +136,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ shortLink: data?.generateShortLink?.shortLink });
     }
 
-    // 2. IMPORTAR ROUPAS STREETWEAR COM FILTRO DE VENDAS E PREÇO JUSTO
+    // 2. IMPORTAR ROUPAS STREETWEAR (CONSULTA LIMPA QUE NÃO DÁ ERRO 10000)
     if (action === "import_step" || action === "import_items") {
       const sorteado = GRADE_STREETWEAR[Math.floor(Math.random() * GRADE_STREETWEAR.length)];
       const loteEnviado = Array.isArray(body.lotes) && body.lotes.length === 1 ? body.lotes[0] : null;
@@ -144,8 +144,6 @@ module.exports = async function handler(req, res) {
       const kw = (body.kw || loteEnviado?.kw || sorteado.kw).trim();
       const catNome = (body.cat || loteEnviado?.cat || sorteado.cat).trim();
       const page = parseInt(body.page, 10) || 1;
-      const limit = parseInt(body.limit || loteEnviado?.limit, 10) || 10;
-      const precoMax = parseFloat(body.maxPrice) || 150; // Evita peças caras demais por padrão
 
       const catsAtuais = (await sbRest("categorias?select=*")) || [];
       let catObj = catsAtuais.find(c => c.nome.toLowerCase() === catNome.toLowerCase());
@@ -160,19 +158,32 @@ module.exports = async function handler(req, res) {
       const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
       const nomesExistentes = new Set(prodsAtuais.map(p => (p.nome || "").toLowerCase()));
 
-      // sortType: 2 puxa os MAIS VENDIDOS para evitar anúncios com 0 vendas
-      const q = `query {
-        productOfferV2(keyword: ${JSON.stringify(kw)}, sortType: 2, page: ${page}, limit: ${limit}) {
-          nodes { itemId productName priceMin priceMax priceDiscountRate imageUrl offerLink sales ratingStar }
+      // Consulta idêntica à que funcionou (sem sortType para evitar erro 10000 na Shopee)
+      const montarQuery = (pag) => `query {
+        productOfferV2(keyword: ${JSON.stringify(kw)}, page: ${pag}, limit: 12) {
+          nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
         }
       }`;
 
-      const data = await shopeeGraphQL(q);
+      let data;
+      try {
+        data = await shopeeGraphQL(montarQuery(page));
+      } catch (errPage) {
+        // Se a página > 1 falhar na Shopee, busca na página 1
+        data = await shopeeGraphQL(montarQuery(1));
+      }
+
       const nodes = data?.productOfferV2?.nodes || [];
+
+      // Ordena no nosso código priorizando quem tem mais vendas reais
+      nodes.sort((a, b) => (parseInt(b.sales, 10) || 0) - (parseInt(a.sales, 10) || 0));
+
       const novosProdutos = [];
       const agora = new Date().toISOString();
 
       for (const item of nodes) {
+        if (novosProdutos.length >= 5) break; // Salva até 5 peças por vez
+
         const nomeLimpo = (item.productName || "").trim().slice(0, 90);
         if (!nomeLimpo) continue;
         if (nomesExistentes.has(nomeLimpo.toLowerCase())) continue;
@@ -182,19 +193,19 @@ module.exports = async function handler(req, res) {
         const nota = parseFloat(item.ratingStar) || 0;
         const precoCartao = parseFloat(item.priceMin) || 0;
 
-        // Bloqueia produtos com 0 vendas ou acima do preço máximo definido
-        if (vendas < 1 || precoCartao <= 0 || precoCartao > precoMax) continue;
+        // Ignora anúncios sem vendas (0 vendidos) ou acima de R$ 160
+        if (vendas <= 0 || precoCartao <= 0 || precoCartao > 160) continue;
 
         nomesExistentes.add(nomeLimpo.toLowerCase());
-        const notaTexto = nota > 0 ? `⭐ ${nota.toFixed(1)}` : "⭐ Novo";
-        const desc = `${notaTexto} | 🔥 ${vendas} vendidos [REF:${item.itemId}]`;
+        const textoNota = nota > 0 ? `⭐ ${nota.toFixed(1)}` : "⭐ Destaque";
+        const textoVendas = `🔥 ${vendas} vendidos`;
 
         novosProdutos.push({
           nome: nomeLimpo,
           categoria_id: catObj?.id,
           preco: precoCartao,
           link: item.offerLink,
-          descricao: desc,
+          descricao: `${textoNota} | ${textoVendas} [REF:${item.itemId}]`,
           foto_url: item.imageUrl,
           atualizado_em: agora,
           preco_atualizado_em: agora
