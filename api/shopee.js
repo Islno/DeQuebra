@@ -6,7 +6,26 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const SHOPEE_APP_ID = (process.env.SHOPEE_APP_ID || "").trim();
 const SHOPEE_SECRET = (process.env.SHOPEE_SECRET || "").trim();
 
-// Palavras proibidas (bloqueia brinquedos, decoração, infantil, etc.)
+// Lista de buscas Streetwear (usada de pouco em pouco a cada execução)
+const GRADE_STREETWEAR = [
+  { kw: "camiseta racionais", cat: "Camisetas Street" },
+  { kw: "camiseta sabotage", cat: "Camisetas Street" },
+  { kw: "camiseta oversized preta", cat: "Camisetas Street" },
+  { kw: "camiseta tupac", cat: "Camisetas Street" },
+  { kw: "camiseta streetwear", cat: "Camisetas Street" },
+  { kw: "calca cargo preta", cat: "Calças & Bermudas" },
+  { kw: "calca jeans baggy", cat: "Calças & Bermudas" },
+  { kw: "bermuda jeans larga", cat: "Calças & Bermudas" },
+  { kw: "moletom canguru preto", cat: "Moletons & Jaquetas" },
+  { kw: "jaqueta corta vento", cat: "Moletons & Jaquetas" },
+  { kw: "bone five panel", cat: "Bonés & Gorros" },
+  { kw: "gorro beanie", cat: "Bonés & Gorros" },
+  { kw: "corrente grumet inox", cat: "Acessórios Street" },
+  { kw: "oculos sol retangular", cat: "Acessórios Street" },
+  { kw: "shoulder bag preta", cat: "Shoulder Bags" }
+];
+
+// Bloqueia brinquedos, itens infantis, decoração e mídia
 const PALAVRAS_BLOQUEADAS = [
   "brinquedo", "boneco", "boneca", "miniatura", "action figure", "funko",
   "infantil", "bebe", "bebê", "crianca", "criança", "kids", "menino", "menina",
@@ -16,7 +35,7 @@ const PALAVRAS_BLOQUEADAS = [
   "fingerboard", "skate de dedo", "pelucia", "pelúcia", "almofada", "tapete", "toalha"
 ];
 
-// Palavras obrigatórias (garante que é roupa ou acessório de vestir)
+// Garante que o item é vestuário ou acessório de uso pessoal
 const PALAVRAS_VESTUARIO = [
   "camiseta", "camisa", "blusa", "t-shirt", "tshirt", "oversized", "regata", "peita",
   "calca", "calça", "bermuda", "short", "jeans", "cargo", "baggy", "jogger", "sarja",
@@ -27,10 +46,22 @@ const PALAVRAS_VESTUARIO = [
   "meia", "tenis", "tênis", "chinelo", "cinto", "carteira"
 ];
 
-function ehRoupaOuAcessorioValido(titulo) {
+function ehRoupaValida(titulo) {
   const t = (titulo || "").toLowerCase();
   if (PALAVRAS_BLOQUEADAS.some(b => t.includes(b))) return false;
   return PALAVRAS_VESTUARIO.some(v => t.includes(v));
+}
+
+async function lerBody(req) {
+  if (req.body && typeof req.body === "object") return req.body;
+  if (req.body && typeof req.body === "string") {
+    try { return JSON.parse(req.body); } catch (e) { return {}; }
+  }
+  const buffers = [];
+  for await (const chunk of req) buffers.push(chunk);
+  const raw = Buffer.concat(buffers).toString("utf8");
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch (e) { return {}; }
 }
 
 async function shopeeGraphQL(query) {
@@ -93,8 +124,9 @@ module.exports = async function handler(req, res) {
       return data;
     }
 
-    const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
-    const action = req.query?.action || body.action;
+    const body = await lerBody(req);
+    const urlObj = new URL(req.url || "/api/shopee", "http://localhost");
+    const action = req.query?.action || urlObj.searchParams.get("action") || body.action || "import_step";
 
     // 1. CONVERTER LINK INDIVIDUAL
     if (action === "convert_link") {
@@ -107,12 +139,16 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ shortLink: data?.generateShortLink?.shortLink });
     }
 
-    // 2. IMPORTAR 1 LOTE POR VEZ (MODO GOTA-A-GOTA SEM TRAVAR A SHOPEE)
-    if (action === "import_step") {
-      const kw = (body.kw || "camiseta racionais").trim();
-      const catNome = (body.cat || "Camisetas Street").trim();
-      const page = parseInt(body.page, 10) || 1;
-      const limit = parseInt(body.limit, 10) || 6;
+    // 2. IMPORTAR ROUPAS STREETWEAR DE POUCO EM POUCO (Aceita tanto import_step quanto import_items)
+    if (action === "import_step" || action === "import_items") {
+      // Se veio uma busca específica ou se sorteia 1 estilo da grade Streetwear por vez
+      const sorteado = GRADE_STREETWEAR[Math.floor(Math.random() * GRADE_STREETWEAR.length)];
+      const loteEnviado = Array.isArray(body.lotes) && body.lotes.length === 1 ? body.lotes[0] : null;
+
+      const kw = (body.kw || loteEnviado?.kw || sorteado.kw).trim();
+      const catNome = (body.cat || loteEnviado?.cat || sorteado.cat).trim();
+      const page = parseInt(body.page, 10) || Math.floor(Math.random() * 3) + 1;
+      const limit = parseInt(body.limit || loteEnviado?.limit, 10) || 6;
 
       const catsAtuais = (await sbRest("categorias?select=*")) || [];
       let catObj = catsAtuais.find(c => c.nome.toLowerCase() === catNome.toLowerCase());
@@ -127,7 +163,6 @@ module.exports = async function handler(req, res) {
       const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
       const nomesExistentes = new Set(prodsAtuais.map(p => (p.nome || "").toLowerCase()));
 
-      // Faz APENAS UMA chamada limpa à Shopee para nunca dar erro 10000
       const q = `query {
         productOfferV2(keyword: ${JSON.stringify(kw)}, page: ${page}, limit: ${limit}) {
           nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
@@ -143,9 +178,7 @@ module.exports = async function handler(req, res) {
         const nomeLimpo = (item.productName || "").trim().slice(0, 90);
         if (!nomeLimpo) continue;
         if (nomesExistentes.has(nomeLimpo.toLowerCase())) continue;
-
-        // Passa pelo filtro anti-brinquedo / só roupas e acessórios
-        if (!ehRoupaOuAcessorioValido(nomeLimpo)) continue;
+        if (!ehRoupaValida(nomeLimpo)) continue;
 
         nomesExistentes.add(nomeLimpo.toLowerCase());
         novosProdutos.push({
@@ -175,7 +208,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 3. ATUALIZAR PREÇO DE POUCO EM POUCO (PEGA OS 3 PRODUTOS HÁ MAIS TEMPO SEM VERIFICAR)
+    // 3. ATUALIZAR PREÇOS DE POUCO EM POUCO (3 POR VEZ)
     if (action === "sync_prices") {
       const produtos = (await sbRest("produtos?select=*&order=preco_atualizado_em.asc.nullsfirst&limit=3")) || [];
       let atualizados = 0;
@@ -218,7 +251,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true, verificados: produtos.length, atualizados });
     }
 
-    return res.status(400).json({ error: "Ação inválida" });
+    return res.status(200).json({ ok: true, adicionados: 0 });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
