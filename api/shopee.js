@@ -6,7 +6,6 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const SHOPEE_APP_ID = (process.env.SHOPEE_APP_ID || "").trim();
 const SHOPEE_SECRET = (process.env.SHOPEE_SECRET || "").trim();
 
-// Lista de buscas Streetwear (usada de pouco em pouco a cada execução)
 const GRADE_STREETWEAR = [
   { kw: "camiseta racionais", cat: "Camisetas Street" },
   { kw: "camiseta sabotage", cat: "Camisetas Street" },
@@ -25,7 +24,6 @@ const GRADE_STREETWEAR = [
   { kw: "shoulder bag preta", cat: "Shoulder Bags" }
 ];
 
-// Bloqueia brinquedos, itens infantis, decoração e mídia
 const PALAVRAS_BLOQUEADAS = [
   "brinquedo", "boneco", "boneca", "miniatura", "action figure", "funko",
   "infantil", "bebe", "bebê", "crianca", "criança", "kids", "menino", "menina",
@@ -35,7 +33,6 @@ const PALAVRAS_BLOQUEADAS = [
   "fingerboard", "skate de dedo", "pelucia", "pelúcia", "almofada", "tapete", "toalha"
 ];
 
-// Garante que o item é vestuário ou acessório de uso pessoal
 const PALAVRAS_VESTUARIO = [
   "camiseta", "camisa", "blusa", "t-shirt", "tshirt", "oversized", "regata", "peita",
   "calca", "calça", "bermuda", "short", "jeans", "cargo", "baggy", "jogger", "sarja",
@@ -139,16 +136,16 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ shortLink: data?.generateShortLink?.shortLink });
     }
 
-    // 2. IMPORTAR ROUPAS STREETWEAR DE POUCO EM POUCO (Aceita tanto import_step quanto import_items)
+    // 2. IMPORTAR ROUPAS STREETWEAR COM FILTRO DE VENDAS E PREÇO JUSTO
     if (action === "import_step" || action === "import_items") {
-      // Se veio uma busca específica ou se sorteia 1 estilo da grade Streetwear por vez
       const sorteado = GRADE_STREETWEAR[Math.floor(Math.random() * GRADE_STREETWEAR.length)];
       const loteEnviado = Array.isArray(body.lotes) && body.lotes.length === 1 ? body.lotes[0] : null;
 
       const kw = (body.kw || loteEnviado?.kw || sorteado.kw).trim();
       const catNome = (body.cat || loteEnviado?.cat || sorteado.cat).trim();
-      const page = parseInt(body.page, 10) || Math.floor(Math.random() * 3) + 1;
-      const limit = parseInt(body.limit || loteEnviado?.limit, 10) || 6;
+      const page = parseInt(body.page, 10) || 1;
+      const limit = parseInt(body.limit || loteEnviado?.limit, 10) || 10;
+      const precoMax = parseFloat(body.maxPrice) || 150; // Evita peças caras demais por padrão
 
       const catsAtuais = (await sbRest("categorias?select=*")) || [];
       let catObj = catsAtuais.find(c => c.nome.toLowerCase() === catNome.toLowerCase());
@@ -163,9 +160,10 @@ module.exports = async function handler(req, res) {
       const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
       const nomesExistentes = new Set(prodsAtuais.map(p => (p.nome || "").toLowerCase()));
 
+      // sortType: 2 puxa os MAIS VENDIDOS para evitar anúncios com 0 vendas
       const q = `query {
-        productOfferV2(keyword: ${JSON.stringify(kw)}, page: ${page}, limit: ${limit}) {
-          nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
+        productOfferV2(keyword: ${JSON.stringify(kw)}, sortType: 2, page: ${page}, limit: ${limit}) {
+          nodes { itemId productName priceMin priceMax priceDiscountRate imageUrl offerLink sales ratingStar }
         }
       }`;
 
@@ -180,13 +178,23 @@ module.exports = async function handler(req, res) {
         if (nomesExistentes.has(nomeLimpo.toLowerCase())) continue;
         if (!ehRoupaValida(nomeLimpo)) continue;
 
+        const vendas = parseInt(item.sales, 10) || 0;
+        const nota = parseFloat(item.ratingStar) || 0;
+        const precoCartao = parseFloat(item.priceMin) || 0;
+
+        // Bloqueia produtos com 0 vendas ou acima do preço máximo definido
+        if (vendas < 1 || precoCartao <= 0 || precoCartao > precoMax) continue;
+
         nomesExistentes.add(nomeLimpo.toLowerCase());
+        const notaTexto = nota > 0 ? `⭐ ${nota.toFixed(1)}` : "⭐ Novo";
+        const desc = `${notaTexto} | 🔥 ${vendas} vendidos [REF:${item.itemId}]`;
+
         novosProdutos.push({
           nome: nomeLimpo,
           categoria_id: catObj?.id,
-          preco: parseFloat(item.priceMin) || null,
+          preco: precoCartao,
           link: item.offerLink,
-          descricao: `⭐ ${item.ratingStar || "4.9"} | 🔥 +${item.sales || 50} vendidos [REF:${item.itemId}]`,
+          descricao: desc,
           foto_url: item.imageUrl,
           atualizado_em: agora,
           preco_atualizado_em: agora
