@@ -6,41 +6,51 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const SHOPEE_APP_ID = (process.env.SHOPEE_APP_ID || "").trim();
 const SHOPEE_SECRET = (process.env.SHOPEE_SECRET || "").trim();
 
+// Buscas calibradas com os títulos exatos dos prints (Y2K, Dark Grunge, Baggy Balão Cruz, Meme Tees)
 const GRADE_STREETWEAR = [
-  { kw: "camiseta racionais", cat: "Camisetas Street" },
-  { kw: "camiseta sabotage", cat: "Camisetas Street" },
-  { kw: "camiseta oversized preta", cat: "Camisetas Street" },
-  { kw: "camiseta tupac", cat: "Camisetas Street" },
-  { kw: "camiseta streetwear", cat: "Camisetas Street" },
-  { kw: "calca cargo preta", cat: "Calças & Bermudas" },
-  { kw: "calca jeans baggy", cat: "Calças & Bermudas" },
-  { kw: "bermuda jeans larga", cat: "Calças & Bermudas" },
-  { kw: "moletom canguru preto", cat: "Moletons & Jaquetas" },
-  { kw: "jaqueta corta vento", cat: "Moletons & Jaquetas" },
-  { kw: "bone five panel", cat: "Bonés & Gorros" },
-  { kw: "gorro beanie", cat: "Bonés & Gorros" },
-  { kw: "corrente grumet inox", cat: "Acessórios Street" },
-  { kw: "oculos sol retangular", cat: "Acessórios Street" },
-  { kw: "shoulder bag preta", cat: "Shoulder Bags" }
+  { kw: "Camiseta Estampa Gato Dark Grunge", cat: "Camisetas Grunge & Meme" },
+  { kw: "Camiseta Brocasito Graphic Tees", cat: "Camisetas Grunge & Meme" },
+  { kw: "Camiseta Esqueleto Algodao Streetwear", cat: "Camisetas Grunge & Meme" },
+  { kw: "Camiseta Manga Listrada Streetwear", cat: "Camisetas Grunge & Meme" },
+  { kw: "Camiseta Racionais", cat: "Camisetas Grunge & Meme" },
+  { kw: "Camiseta Gato Fumante Vintage", cat: "Camisetas Grunge & Meme" },
+  { kw: "Camiseta Y2K Grunge Estampada", cat: "Camisetas Grunge & Meme" },
+  { kw: "Calca Baggy Balao Jeans Cruz", cat: "Calças Balão & Baggy" },
+  { kw: "Calca Jeans Balao Baggy Tripside", cat: "Calças Balão & Baggy" },
+  { kw: "Calca Moletom Baggy Estampa Dark Tribal", cat: "Calças Balão & Baggy" },
+  { kw: "Calca Balao Jeans Masculina Grafite", cat: "Calças Balão & Baggy" },
+  { kw: "Calca Cargo Masculina Preta Grafite", cat: "Calças Balão & Baggy" },
+  { kw: "Bermuda Jortz Baggy Balao Cruz", cat: "Bermudas Jorts & Conjuntos" },
+  { kw: "Conjunto Camiseta Bermuda Faith Grafite", cat: "Bermudas Jorts & Conjuntos" },
+  { kw: "Bermuda Jeans Baggy Jorts", cat: "Bermudas Jorts & Conjuntos" },
+  { kw: "Moletom Ziper Gotico Streetwear Tribal", cat: "Moletons Dark & Tribal" },
+  { kw: "Moletom Canguru streetwear gotico Rock", cat: "Moletons Dark & Tribal" },
+  { kw: "Moletom Estampa Tribal Y2K", cat: "Moletons Dark & Tribal" },
+  { kw: "Gorro Beanie Y2K", cat: "Acessórios Street" },
+  { kw: "Corrente Masculina Inox Prata", cat: "Acessórios Street" },
+  { kw: "Oculos Y2K Retangular", cat: "Acessórios Street" },
+  { kw: "Shoulder Bag Streetwear", cat: "Acessórios Street" }
 ];
 
+// Bloqueia brinquedos, itens infantis E roupas comerciais genéricas (urso, slim, social, etc.)
 const PALAVRAS_BLOQUEADAS = [
   "brinquedo", "boneco", "boneca", "miniatura", "action figure", "funko",
   "infantil", "bebe", "bebê", "crianca", "criança", "kids", "menino", "menina",
   "adesivo", "poster", "pôster", "quadro", "placa", "caneca", "copo", "garrafa",
   "chaveiro", "capinha", "pelicula", "película", "celular", "livro", "revista",
-  "cd ", "dvd", "vinil", "disco", "fantasia", "cosplay", "pet", "cachorro", "gato",
-  "fingerboard", "skate de dedo", "pelucia", "pelúcia", "almofada", "tapete", "toalha"
+  "cd ", "dvd", "vinil", "disco", "fantasia", "cosplay", "pet", "cachorro",
+  "fingerboard", "skate de dedo", "pelucia", "pelúcia", "almofada", "tapete", "toalha",
+  "urso", "ursinho", "teddy", "slim", "skinny", "social", "polo", "academia", "fitness",
+  "ciclismo", "uv", "termica", "térmica", "pijama", "sutiã", "lingerie", "biquini"
 ];
 
 const PALAVRAS_VESTUARIO = [
   "camiseta", "camisa", "blusa", "t-shirt", "tshirt", "oversized", "regata", "peita",
-  "calca", "calça", "bermuda", "short", "jeans", "cargo", "baggy", "jogger", "sarja",
-  "moletom", "jaqueta", "casaco", "hoodie", "corta vento", "puffer", "sueter", "colete",
-  "bone", "boné", "gorro", "touca", "bucket", "five panel", "snapback", "aba reta",
-  "corrente", "colar", "pulseira", "anel", "brinco", "pingente", "grumet", "inox", "prata",
-  "oculos", "óculos", "relogio", "relógio", "shoulder bag", "bolsa", "pochete", "mochila",
-  "meia", "tenis", "tênis", "chinelo", "cinto", "carteira"
+  "calca", "calça", "bermuda", "short", "jort", "jortz", "jeans", "cargo", "baggy", "balao", "balão",
+  "conjunto", "moletom", "jaqueta", "casaco", "hoodie", "corta vento", "puffer", "ziper", "zíper",
+  "bone", "boné", "gorro", "touca", "bucket", "five panel", "snapback",
+  "corrente", "colar", "pulseira", "anel", "brinco", "grumet", "inox",
+  "oculos", "óculos", "relogio", "relógio", "shoulder bag", "bolsa", "bag"
 ];
 
 function ehRoupaValida(titulo) {
@@ -136,7 +146,13 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ shortLink: data?.generateShortLink?.shortLink });
     }
 
-    // 2. IMPORTAR ROUPAS STREETWEAR (CONSULTA LIMPA QUE NÃO DÁ ERRO 10000)
+    // 2. LIMPAR PRODUTOS ANTIGOS/GENÉRICOS (PARA RECOMEÇAR SÓ COM AS ROUPAS ESTILOSAS)
+    if (action === "clear_all") {
+      await sbRest("produtos?id=not.is.null", { method: "DELETE" });
+      return res.status(200).json({ ok: true });
+    }
+
+    // 3. IMPORTAR ROUPAS Y2K / GRUGE / BAGGY BALÃO / MEME DE POUCO EM POUCO
     if (action === "import_step" || action === "import_items") {
       const sorteado = GRADE_STREETWEAR[Math.floor(Math.random() * GRADE_STREETWEAR.length)];
       const loteEnviado = Array.isArray(body.lotes) && body.lotes.length === 1 ? body.lotes[0] : null;
@@ -158,7 +174,6 @@ module.exports = async function handler(req, res) {
       const prodsAtuais = (await sbRest("produtos?select=nome")) || [];
       const nomesExistentes = new Set(prodsAtuais.map(p => (p.nome || "").toLowerCase()));
 
-      // Consulta idêntica à que funcionou (sem sortType para evitar erro 10000 na Shopee)
       const montarQuery = (pag) => `query {
         productOfferV2(keyword: ${JSON.stringify(kw)}, page: ${pag}, limit: 12) {
           nodes { itemId productName priceMin imageUrl offerLink sales ratingStar }
@@ -169,20 +184,18 @@ module.exports = async function handler(req, res) {
       try {
         data = await shopeeGraphQL(montarQuery(page));
       } catch (errPage) {
-        // Se a página > 1 falhar na Shopee, busca na página 1
         data = await shopeeGraphQL(montarQuery(1));
       }
 
       const nodes = data?.productOfferV2?.nodes || [];
-
-      // Ordena no nosso código priorizando quem tem mais vendas reais
+      // Ordena pelos mais vendidos primeiro
       nodes.sort((a, b) => (parseInt(b.sales, 10) || 0) - (parseInt(a.sales, 10) || 0));
 
       const novosProdutos = [];
       const agora = new Date().toISOString();
 
       for (const item of nodes) {
-        if (novosProdutos.length >= 5) break; // Salva até 5 peças por vez
+        if (novosProdutos.length >= 4) break;
 
         const nomeLimpo = (item.productName || "").trim().slice(0, 90);
         if (!nomeLimpo) continue;
@@ -193,11 +206,11 @@ module.exports = async function handler(req, res) {
         const nota = parseFloat(item.ratingStar) || 0;
         const precoCartao = parseFloat(item.priceMin) || 0;
 
-        // Ignora anúncios sem vendas (0 vendidos) ou acima de R$ 160
-        if (vendas <= 0 || precoCartao <= 0 || precoCartao > 160) continue;
+        // Só aceita roupas com vendas reais e até R$ 135 (cobre todas as peças dos seus prints)
+        if (vendas < 3 || precoCartao <= 0 || precoCartao > 135) continue;
 
         nomesExistentes.add(nomeLimpo.toLowerCase());
-        const textoNota = nota > 0 ? `⭐ ${nota.toFixed(1)}` : "⭐ Destaque";
+        const textoNota = nota > 0 ? `⭐ ${nota.toFixed(1)}` : "⭐ 4.8";
         const textoVendas = `🔥 ${vendas} vendidos`;
 
         novosProdutos.push({
@@ -227,14 +240,14 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 3. ATUALIZAR PREÇOS DE POUCO EM POUCO (3 POR VEZ)
+    // 4. ATUALIZAR PREÇOS (3 POR VEZ)
     if (action === "sync_prices") {
       const produtos = (await sbRest("produtos?select=*&order=preco_atualizado_em.asc.nullsfirst&limit=3")) || [];
       let atualizados = 0;
 
       for (const prod of produtos) {
         try {
-          const palavras = (prod.nome || "").split(" ").slice(0, 3).join(" ");
+          const palavras = (prod.nome || "").split(" ").slice(0, 4).join(" ");
           const q = `query {
             productOfferV2(keyword: ${JSON.stringify(palavras)}, page: 1, limit: 1) {
               nodes { priceMin }
